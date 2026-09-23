@@ -15,8 +15,9 @@ processor-in-the-loop on an emulated STM32.
 - [ ] M3 Error-state EKF in the loop (MVP)
 - [ ] M4 Monte Carlo + CI regression
 - [ ] M5 Minimum-snap guidance + LQR
+- [ ] HW Real drone: sim-to-real (Jetson + PX4, winter break)
 - [ ] M6 Software-in-the-loop over MAVLink
 - [ ] M7 Processor-in-the-loop on an emulated STM32 (Renode)
-- [ ] M8 Second vehicle + ROS 2 bridge
+- [ ] M8 Real hardware or second vehicle
 
 Conventions: [docs/conventions.md](docs/conventions.md)
