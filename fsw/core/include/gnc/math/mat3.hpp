@@ -64,6 +64,33 @@ constexpr T determinant(const Mat3<T>& a) {
          a(0, 2) * (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0));
 }
 
+/// Inverse via the adjugate. Precondition: determinant(a) != 0.
+template <typename T>
+constexpr Mat3<T> inverse(const Mat3<T>& a) {
+  const T inv_det = T(1) / determinant(a);
+  Mat3<T> out{};
+  out(0, 0) = (a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1)) * inv_det;
+  out(0, 1) = (a(0, 2) * a(2, 1) - a(0, 1) * a(2, 2)) * inv_det;
+  out(0, 2) = (a(0, 1) * a(1, 2) - a(0, 2) * a(1, 1)) * inv_det;
+  out(1, 0) = (a(1, 2) * a(2, 0) - a(1, 0) * a(2, 2)) * inv_det;
+  out(1, 1) = (a(0, 0) * a(2, 2) - a(0, 2) * a(2, 0)) * inv_det;
+  out(1, 2) = (a(0, 2) * a(1, 0) - a(0, 0) * a(1, 2)) * inv_det;
+  out(2, 0) = (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0)) * inv_det;
+  out(2, 1) = (a(0, 1) * a(2, 0) - a(0, 0) * a(2, 1)) * inv_det;
+  out(2, 2) = (a(0, 0) * a(1, 1) - a(0, 1) * a(1, 0)) * inv_det;
+  return out;
+}
+
+/// Diagonal matrix with d on the diagonal.
+template <typename T>
+constexpr Mat3<T> diag(const Vec3<T>& d) {
+  // clang-format off
+  return {{d.x,  T(0), T(0),
+           T(0), d.y,  T(0),
+           T(0), T(0), d.z}};
+  // clang-format on
+}
+
 /// Cross-product matrix: skew(a) * b == cross(a, b).
 template <typename T>
 constexpr Mat3<T> skew(const Vec3<T>& a) {
