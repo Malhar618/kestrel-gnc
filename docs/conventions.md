@@ -30,3 +30,22 @@ Physical checks pinned by tests (`tests/unit/test_quat.cpp`):
 Euler angles are for logs, plots and human input only. At pitch = ±90° (gimbal lock)
 only yaw − roll (pitch +90°) or yaw + roll (pitch −90°) is observable; `to_euler321`
 then reports roll = 0.
+
+## Quadrotor plant (`sim/`)
+
+Motor numbering follows PX4's Quad X, so logs and parameters map directly onto a PX4 vehicle:
+
+| Motor | Position | Spin (seen from above) |
+|---|---|---|
+| 1 | front-right | CCW |
+| 2 | rear-left | CCW |
+| 3 | front-left | CW |
+| 4 | rear-right | CW |
+
+- Thrust T = k_T ω² acts along −z body (up). Reaction torque Q = k_Q ω²: a CCW rotor yaws the airframe nose-right (+z body).
+- Motor commands are normalized, u ∈ [0, 1], and set a rotor-speed target u·ω_max reached through a first-order lag.
+- Drag is linear in airspeed (velocity minus wind), per body axis, acting at the CG.
+- Physics steps at 1 kHz with RK4; time is integer microseconds.
+
+Sign checks pinned by `tests/sim/test_quadrotor.cpp`: front rotors faster → nose up;
+right rotors faster → roll left; CCW rotors faster → nose right.
