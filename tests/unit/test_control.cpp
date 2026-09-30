@@ -307,6 +307,18 @@ TEST(QuadController, AtTheSetpointItCommandsHover) {
   EXPECT_FALSE(c.status().saturated);
 }
 
+TEST(QuadController, CancelsGyroscopicCoupling) {
+  // Spinning about body y and z with zero x-rate error still needs an x torque: Euler's
+  // equations couple the axes by w x (J w) = ((Jzz - Jyy) * wy * wz, 0, 0) here.
+  const QuadModel m = default_quad_model();
+  QuadController c(m, default_controller_gains());
+  VehicleState x;
+  x.omega_b_radps = {0.0f, 3.0f, 3.0f};
+  c.step_attitude(x, x.q_nb, m.mass_kg * kG, 0.004f);  // zero attitude error
+  const float jyy = m.inertia_b_kgm2(1, 1), jzz = m.inertia_b_kgm2(2, 2);
+  EXPECT_TRUE(close(c.status().request.torque_b_Nm.x, (jzz - jyy) * 3.0f * 3.0f, 1e-5f));
+}
+
 TEST(QuadController, SaturationFreezesTheRateIntegrator) {
   const QuadModel m = default_quad_model();
   QuadController c(m, default_controller_gains());
