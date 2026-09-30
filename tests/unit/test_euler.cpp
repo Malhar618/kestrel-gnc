@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <numbers>
 
 #include "gnc/math/euler.hpp"
@@ -67,6 +69,30 @@ TYPED_TEST(EulerTest, GimbalLockKeepsTheRotationButNotTheAngles) {
   KESTREL_EXPECT_NEAR(e_down.pitch, -kHalfPi<T>, tolerance);
   KESTREL_EXPECT_NEAR(e_down.yaw, T(0.5), tolerance);
   EXPECT_TRUE(same_rotation(from_euler321(e_down), down, tolerance));
+}
+
+TYPED_TEST(EulerTest, RoundTripNearGimbalLockKeepsTheAttitude) {
+  using T = TypeParam;
+  // Fuzz pitches within 1e-2 rad of +-90 deg (down to exactly 90) with random roll and yaw.
+  // Individual angles are ill-defined there, but the attitude they describe must survive.
+  const T tolerance = std::is_same_v<T, float> ? T(1e-3) : T(1e-7);
+  std::uint32_t state = 12345u;
+  const auto uniform = [&state]() {  // deterministic LCG in [0, 1)
+    state = 1664525u * state + 1013904223u;
+    return static_cast<double>(state >> 8) / 16777216.0;
+  };
+  double worst = 0.0;
+  for (int i = 0; i < 4000; ++i) {
+    const double gap = uniform() < 0.25 ? 0.0 : std::pow(10.0, -2.0 - 8.0 * uniform());
+    const double sign = i % 2 == 0 ? 1.0 : -1.0;
+    const Euler321<T> e{static_cast<T>((2.0 * uniform() - 1.0) * 3.1),
+                        static_cast<T>(sign * (std::numbers::pi / 2.0 - gap)),
+                        static_cast<T>((2.0 * uniform() - 1.0) * 3.1)};
+    const Quat<T> q = from_euler321(e);
+    const T err = angle_between(from_euler321(to_euler321(q)), q);
+    worst = std::max(worst, static_cast<double>(err));
+  }
+  KESTREL_EXPECT_NEAR(worst, 0.0, tolerance);
 }
 
 }  // namespace

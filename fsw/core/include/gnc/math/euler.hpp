@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -36,14 +35,21 @@ Quat<T> from_euler321(const Euler321<T>& e) {
 /// is observable. There we report roll = 0 and put the whole rotation in yaw.
 template <typename T>
 Euler321<T> to_euler321(const Quat<T>& q) {
-  const T sin_pitch = std::clamp(T(2) * (q.w * q.y - q.x * q.z), T(-1), T(1));
-  if (std::abs(sin_pitch) >= T(1) - std::numeric_limits<T>::epsilon()) {
+  const T sin_pitch = T(2) * (q.w * q.y - q.x * q.z);
+  const T roll_sin = T(2) * (q.w * q.x + q.y * q.z);         // cos(pitch) sin(roll)
+  const T roll_cos = T(1) - T(2) * (q.x * q.x + q.y * q.y);  // cos(pitch) cos(roll)
+  // |cos(pitch)| from terms whose rounding error stays ~epsilon even near +-90 deg,
+  // unlike sin(pitch), whose last few bits are lost exactly where they matter.
+  const T cos_pitch = std::hypot(roll_sin, roll_cos);
+  // The roll and yaw formulas divide quantities of size cos(pitch), so their error grows
+  // like epsilon / cos(pitch). Snapping to +-90 deg instead costs about cos(pitch).
+  // Switching at cos(pitch) = sqrt(epsilon) keeps both errors below sqrt(epsilon).
+  if (cos_pitch < std::sqrt(std::numeric_limits<T>::epsilon())) {
     const T half_pi = std::numbers::pi_v<T> / T(2);
     return {T(0), std::copysign(half_pi, sin_pitch),
             std::atan2(T(2) * (q.w * q.z - q.x * q.y), T(1) - T(2) * (q.x * q.x + q.z * q.z))};
   }
-  return {std::atan2(T(2) * (q.w * q.x + q.y * q.z), T(1) - T(2) * (q.x * q.x + q.y * q.y)),
-          std::asin(sin_pitch),
+  return {std::atan2(roll_sin, roll_cos), std::atan2(sin_pitch, cos_pitch),
           std::atan2(T(2) * (q.w * q.z + q.x * q.y), T(1) - T(2) * (q.y * q.y + q.z * q.z))};
 }
 

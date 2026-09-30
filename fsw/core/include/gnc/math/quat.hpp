@@ -69,10 +69,16 @@ constexpr Quat<T> conjugate(const Quat<T>& q) {
   return {q.w, -q.x, -q.y, -q.z};
 }
 
-/// Picks the sign with w >= 0, so equal rotations compare equal.
+/// Picks one of q and -q, so equal rotations compare equal: the one with w > 0, or at
+/// an exact half-turn (w == 0, including -0.0) the one whose first nonzero of x, y, z
+/// is positive.
 template <typename T>
 constexpr Quat<T> canonical(const Quat<T>& q) {
-  return q.w < T(0) ? T(-1) * q : q;
+  bool flip = q.w < T(0);
+  if (q.w == T(0)) {
+    flip = q.x < T(0) || (q.x == T(0) && (q.y < T(0) || (q.y == T(0) && q.z < T(0))));
+  }
+  return flip ? T(-1) * q : q;
 }
 
 /// Rotates v by q: returns q ⊗ [0, v] ⊗ q*, expanded so it costs two cross products.
