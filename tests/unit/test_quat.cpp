@@ -84,6 +84,27 @@ TYPED_TEST(QuatTest, QAndMinusQAreTheSameRotation) {
   }
 }
 
+TYPED_TEST(QuatTest, CanonicalPicksOneSignForExactHalfTurns) {
+  using T = TypeParam;
+  // At a half-turn w == 0, so the sign of w can't choose between q and -q. Both signs
+  // (and -0.0 for w) must still land on the same representative.
+  const Quat<T> half_turns[][2] = {
+      {{T(0), T(0), T(0), T(1)}, {T(0), T(0), T(0), T(-1)}},
+      {{T(-0.0), T(0), T(1), T(0)}, {T(0), T(0), T(-1), T(0)}},
+      {{T(0), T(0.6), T(-0.8), T(0)}, {T(-0.0), T(-0.6), T(0.8), T(0)}},
+  };
+  for (const auto& pair : half_turns) {
+    const Quat<T> a = canonical(pair[0]);
+    const Quat<T> b = canonical(pair[1]);
+    EXPECT_TRUE(a.w == b.w && a.x == b.x && a.y == b.y && a.z == b.z);
+    EXPECT_TRUE(same_rotation(pair[0], pair[1], tol<T>()));
+    EXPECT_TRUE(vec_near(to_rotation_vector(pair[0]), to_rotation_vector(pair[1]), tol<T>()));
+  }
+  // A half-turn about z logs to +pi about +z, whichever sign it was given in.
+  EXPECT_TRUE(vec_near(to_rotation_vector(Quat<T>{T(0), T(0), T(0), T(-1)}),
+                       Vec3<T>{T(0), T(0), kPi<T>}, T(10) * tol<T>()));
+}
+
 // --- DCM ---
 
 TYPED_TEST(QuatTest, DcmIsAProperRotation) {
