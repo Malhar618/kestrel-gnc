@@ -43,7 +43,7 @@ Motor numbering follows PX4's Quad X, so logs and parameters map directly onto a
 | 4 | rear-right | CW |
 
 - Thrust T = k_T ω² acts along −z body (up). Reaction torque Q = k_Q ω²: a CCW rotor yaws the airframe nose-right (+z body).
-- Motor commands are normalized, u ∈ [0, 1], and set a rotor-speed target u·ω_max reached through a first-order lag.
+- Motor commands are normalized, u ∈ [0, 1], and set a rotor-speed target u·ω_max reached through a first-order lag, integrated exactly (so any time step is stable).
 - Drag is linear in airspeed (velocity minus wind), per body axis, acting at the CG.
 - Physics steps at 1 kHz with RK4; time is integer microseconds.
 

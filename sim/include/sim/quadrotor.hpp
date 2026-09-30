@@ -59,13 +59,17 @@ struct Wrench {
 
 /// Rotor thrust (along -z body), rotor reaction torques, the moments of the thrusts
 /// about the CG, and linear aerodynamic drag on the airspeed (velocity minus wind).
+Wrench quad_wrench(const QuadParams& p, const RigidBodyState& body,
+                   const std::array<double, kNumRotors>& rotor_speed_radps, const Environment& env);
 Wrench quad_wrench(const QuadParams& p, const QuadState& x, const Environment& env);
 
 QuadState quad_derivative(const QuadParams& p, const QuadState& x, const MotorCommand& cmd,
                           const Environment& env);
 
-/// Advances the state by dt_s with RK4, holding the command constant. Then
-/// renormalizes q_nb and clamps rotor speeds at zero.
+/// Advances the state by dt_s, holding the command constant. Rotor speeds follow the
+/// exact solution of the first-order motor lag, so any dt is stable; the body is
+/// integrated with RK4 using the thrust from that exact rotor-speed history, then q_nb
+/// is renormalized. Precondition: motor_time_constant_s > 0.
 QuadState quad_step(const QuadParams& p, const QuadState& x, const MotorCommand& cmd,
                     const Environment& env, double dt_s);
 

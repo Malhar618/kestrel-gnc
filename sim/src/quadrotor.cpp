@@ -49,10 +49,34 @@ QuadState operator*(double s, const QuadState& x) {
   return out;
 }
 
-Wrench quad_wrench(const QuadParams& p, const QuadState& x, const Environment& env) {
+namespace {
+
+double rotor_speed_target(const QuadParams& p, double u) {
+  return std::clamp(u, 0.0, 1.0) * p.rotor_speed_max_radps;
+}
+
+// Rotor speeds t_s into a step: each rotor relaxes exponentially toward its target,
+// which is the exact solution of the motor lag while the command is held constant.
+std::array<double, kNumRotors> rotor_speeds_at(const QuadParams& p,
+                                               const std::array<double, kNumRotors>& start,
+                                               const MotorCommand& cmd, double t_s) {
+  const double decay = std::exp(-t_s / p.motor_time_constant_s);
+  std::array<double, kNumRotors> speeds{};
+  for (std::size_t i = 0; i < kNumRotors; ++i) {
+    const double target = rotor_speed_target(p, cmd.u[i]);
+    speeds[i] = target + (start[i] - target) * decay;
+  }
+  return speeds;
+}
+
+}  // namespace
+
+Wrench quad_wrench(const QuadParams& p, const RigidBodyState& body,
+                   const std::array<double, kNumRotors>& rotor_speed_radps,
+                   const Environment& env) {
   Wrench w;
   for (std::size_t i = 0; i < kNumRotors; ++i) {
-    const double speed_sq = x.rotor_speed_radps[i] * x.rotor_speed_radps[i];
+    const double speed_sq = rotor_speed_radps[i] * rotor_speed_radps[i];
     const Vec3d thrust_b{0.0, 0.0, -p.thrust_coeff * speed_sq};  // rotors push up = -z body
     w.force_b_N = w.force_b_N + thrust_b;
     w.torque_b_Nm = w.torque_b_Nm + gnc::cross(p.rotors[i].pos_b_m, thrust_b);
@@ -60,11 +84,15 @@ Wrench quad_wrench(const QuadParams& p, const QuadState& x, const Environment& e
     w.torque_b_Nm.z += static_cast<double>(p.rotors[i].spin) * p.torque_coeff * speed_sq;
   }
   const Vec3d airspeed_b =
-      gnc::rotate(gnc::conjugate(x.body.q_nb), x.body.vel_ned_mps - env.wind_ned_mps);
+      gnc::rotate(gnc::conjugate(body.q_nb), body.vel_ned_mps - env.wind_ned_mps);
   w.force_b_N =
       w.force_b_N - Vec3d{p.drag_coeff_b.x * airspeed_b.x, p.drag_coeff_b.y * airspeed_b.y,
                           p.drag_coeff_b.z * airspeed_b.z};
   return w;
+}
+
+Wrench quad_wrench(const QuadParams& p, const QuadState& x, const Environment& env) {
+  return quad_wrench(p, x.body, x.rotor_speed_radps, env);
 }
 
 QuadState quad_derivative(const QuadParams& p, const QuadState& x, const MotorCommand& cmd,
@@ -74,19 +102,22 @@ QuadState quad_derivative(const QuadParams& p, const QuadState& x, const MotorCo
                                      Vec3d{0.0, 0.0, env.gravity_mps2}),
                {}};
   for (std::size_t i = 0; i < kNumRotors; ++i) {
-    const double target = std::clamp(cmd.u[i], 0.0, 1.0) * p.rotor_speed_max_radps;
-    dx.rotor_speed_radps[i] = (target - x.rotor_speed_radps[i]) / p.motor_time_constant_s;
+    dx.rotor_speed_radps[i] =
+        (rotor_speed_target(p, cmd.u[i]) - x.rotor_speed_radps[i]) / p.motor_time_constant_s;
   }
   return dx;
 }
 
 QuadState quad_step(const QuadParams& p, const QuadState& x, const MotorCommand& cmd,
                     const Environment& env, double dt_s) {
-  const auto f = [&](double /*t*/, const QuadState& s) { return quad_derivative(p, s, cmd, env); };
-  QuadState next = gnc::rk4_step(f, 0.0, x, dt_s);
+  const Vec3d gravity_ned{0.0, 0.0, env.gravity_mps2};
+  const auto f = [&](double t_s, const RigidBodyState& body) {
+    const Wrench w = quad_wrench(p, body, rotor_speeds_at(p, x.rotor_speed_radps, cmd, t_s), env);
+    return rigid_body_derivative(p.body, body, w.force_b_N, w.torque_b_Nm, gravity_ned);
+  };
+  QuadState next{gnc::rk4_step(f, 0.0, x.body, dt_s),
+                 rotor_speeds_at(p, x.rotor_speed_radps, cmd, dt_s)};
   next.body.q_nb = gnc::normalized(next.body.q_nb);
-  // RK4 can overshoot below zero only when dt exceeds ~2.8 motor time constants.
-  for (double& speed : next.rotor_speed_radps) speed = std::max(speed, 0.0);
   return next;
 }
 

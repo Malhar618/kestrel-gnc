@@ -198,13 +198,34 @@ TEST(Quadrotor, CommandsClampToZeroAndOne) {
   for (double rate : d.rotor_speed_radps) EXPECT_EQ(rate, 0.0);
 }
 
-TEST(Quadrotor, CoarseStepNeverReversesARotor) {
-  // With dt = 3 tau, RK4 overshoots a spin-up to -412.5 rad/s; quad_step must clamp at zero.
+TEST(Quadrotor, CoarseStepAgreesWithFineSteps) {
+  // Full spin-up from rest in one step of 3 motor time constants vs 90 steps of 1 ms.
+  // Rotor speeds follow the exact exponential either way, so they must match; the body
+  // integrates a smooth thrust history, so it agrees to within RK4's error at this step.
   const QuadParams p = default_quad_params();
   const Environment env{};
-  const QuadState x = quad_step(p, QuadState{}, MotorCommand{{1.0, 1.0, 1.0, 1.0}}, env,
-                                3.0 * p.motor_time_constant_s);
-  for (double speed : x.rotor_speed_radps) EXPECT_GE(speed, 0.0);
+  const MotorCommand full{{1.0, 1.0, 1.0, 1.0}};
+  const double dt = 3.0 * p.motor_time_constant_s;
+  const QuadState coarse = quad_step(p, QuadState{}, full, env, dt);
+  const QuadState fine = run(p, QuadState{}, full, env, static_cast<int>(std::lround(dt / kDt)));
+  const double expected_speed = p.rotor_speed_max_radps * (1.0 - std::exp(-3.0));
+  for (std::size_t i = 0; i < kNumRotors; ++i) {
+    EXPECT_NEAR(coarse.rotor_speed_radps[i], expected_speed, 1e-9);
+    EXPECT_NEAR(fine.rotor_speed_radps[i], expected_speed, 1e-9);
+  }
+  EXPECT_TRUE(vec_near(coarse.body.vel_ned_mps, fine.body.vel_ned_mps, 0.1));
+}
+
+TEST(Quadrotor, CoarseSpinDownDecaysExponentially) {
+  // Zero command from hover: after 3 time constants each rotor is at e^-3 of hover speed,
+  // never above where it started.
+  const QuadParams p = default_quad_params();
+  const Environment env{};
+  const QuadState x =
+      quad_step(p, hover_state(p, env), MotorCommand{}, env, 3.0 * p.motor_time_constant_s);
+  for (double speed : x.rotor_speed_radps) {
+    EXPECT_NEAR(speed, hover_rotor_speed(p, env) * std::exp(-3.0), 1e-9);
+  }
 }
 
 TEST(Quadrotor, StepReturnsUnitQuaternion) {
