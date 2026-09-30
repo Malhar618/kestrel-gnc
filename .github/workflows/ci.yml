@@ -16,6 +16,6 @@ jobs:
       - uses: lukka/get-cmake@latest
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
-      - run: cmake --preset dev
+      - run: cmake --preset dev -DKESTREL_WARNINGS_AS_ERRORS=ON
       - run: cmake --build --preset dev
       - run: ctest --preset dev

@@ -3,7 +3,7 @@ Embedded-style C++ GNC flight software for a quadrotor (then a second vehicle), 
 its own 6-DOF simulator and verified by unit tests, Monte Carlo, software-in-the-loop and
 processor-in-the-loop on an emulated STM32.
 
-**Status:** M0, repo and CI skeleton.
+**Status:** M1 in progress: math core (quaternions, DCMs, Euler 3-2-1, RK4) done.
 
 ## Quick start
     cmake --preset dev && cmake --build --preset dev && ctest --preset dev
@@ -20,4 +20,4 @@ processor-in-the-loop on an emulated STM32.
 - [ ] M7 Processor-in-the-loop on an emulated STM32 (Renode)
 - [ ] M8 Real hardware or second vehicle
 
-Conventions: [docs/conventions.md](docs/conventions.md)
+Conventions: [docs/conventions.md](docs/conventions.md) · Architecture: [docs/architecture.md](docs/architecture.md)
