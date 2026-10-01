@@ -33,6 +33,13 @@ STATE_ROWS = [
     ("Attitude [deg]", ["roll_deg", "pitch_deg", "yaw_deg"], ["Roll (unwrapped)", "Pitch", "Yaw (unwrapped)"], 1.0),
     ("Body rate [rad/s]", ["omega_x_radps", "omega_y_radps", "omega_z_radps"], ["p (x)", "q (y)", "r (z)"], 0.02),
 ]
+# Controller setpoint for each state column (closed-loop logs only; "nan" otherwise).
+SETPOINT_OF = {
+    "pos_n_m": "pos_sp_n_m", "pos_e_m": "pos_sp_e_m", "pos_d_m": "pos_sp_d_m",
+    "vel_n_mps": "vel_sp_n_mps", "vel_e_mps": "vel_sp_e_mps", "vel_d_mps": "vel_sp_d_mps",
+    "roll_deg": "roll_sp_deg", "pitch_deg": "pitch_sp_deg", "yaw_deg": "yaw_sp_deg",
+    "omega_x_radps": "rate_sp_x_radps", "omega_y_radps": "rate_sp_y_radps", "omega_z_radps": "rate_sp_z_radps",
+}
 
 
 def set_min_range(ax: plt.Axes, values: pd.Series, min_half_range: float) -> None:
@@ -70,19 +77,29 @@ def apply_style() -> None:
 def plot_state(df: pd.DataFrame, title: str, path: Path) -> None:
     df = df.copy()
     # Unwrap angles for display so a steady spin reads as a ramp, not a sawtooth at +-180 deg.
-    for column in ("roll_deg", "yaw_deg"):
-        df[column] = np.rad2deg(np.unwrap(np.deg2rad(df[column])))
+    for column in ("roll_deg", "yaw_deg", "roll_sp_deg", "yaw_sp_deg"):
+        if column in df and df[column].notna().all():
+            df[column] = np.rad2deg(np.unwrap(np.deg2rad(df[column])))
+    legend_ax = None  # the first panel that shows both a setpoint and the actual value
     fig, axes = plt.subplots(len(STATE_ROWS), 3, figsize=(10, 8), sharex=True)
     for row, (ylabel, columns, names, min_half_range) in enumerate(STATE_ROWS):
         for col, (column, name) in enumerate(zip(columns, names)):
             ax = axes[row, col]
-            ax.plot(df["t_s"], df[column], color=TRUTH)
-            set_min_range(ax, df[column], min_half_range)
+            sp = SETPOINT_OF[column]
+            shown = [df[column]]
+            if sp in df and df[sp].notna().any():
+                ax.plot(df["t_s"], df[sp], color=COMMAND, label="Setpoint")
+                shown.append(df[sp].dropna())
+                legend_ax = legend_ax or ax
+            ax.plot(df["t_s"], df[column], color=TRUTH, label="Actual")
+            set_min_range(ax, pd.concat(shown), min_half_range)
             ax.set_title(name)
             if col == 0:
                 ax.set_ylabel(ylabel)
             if row == len(STATE_ROWS) - 1:
                 ax.set_xlabel("Time [s]")
+    if legend_ax is not None:
+        legend_ax.legend(loc="best", frameon=False)
     fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(path)
