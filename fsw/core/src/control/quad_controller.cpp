@@ -6,6 +6,22 @@
 
 namespace gnc {
 
+namespace {
+
+bool finite(const Vec3f& v) {
+  return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
+// Finite and close enough to unit length to be an attitude.
+bool is_attitude(const Quatf& q) {
+  const real n2 = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
+  return std::isfinite(n2) && std::abs(n2 - real(1)) < real(0.1);
+}
+
+bool usable_step(real dt_s) { return std::isfinite(dt_s) && dt_s > 0; }
+
+}  // namespace
+
 QuadControllerGains default_controller_gains() {
   // Chosen from the inside out, each loop a few times slower than the one it drives, then
   // checked in closed loop, including against plants with +-30% inertia, a 50% slower
@@ -50,9 +66,21 @@ void QuadController::reset() {
   vel_pid_.reset();
   rate_pid_.reset();
   status_ = {};
+  last_outputs_ = {};
+}
+
+MotorOutputs QuadController::skip_step() {
+  status_.input_valid = false;
+  return last_outputs_;
 }
 
 MotorOutputs QuadController::step(const VehicleState& x, const PositionSetpoint& sp, real dt_s) {
+  if (!usable_step(dt_s) || !finite(x.pos_ned_m) || !finite(x.vel_ned_mps) ||
+      !is_attitude(x.q_nb) || !finite(x.omega_b_radps) || !finite(sp.pos_ned_m) ||
+      !std::isfinite(sp.yaw_rad) || !finite(sp.vel_ff_ned_mps) || !finite(sp.acc_ff_ned_mps2)) {
+    return skip_step();
+  }
+
   // Position -> velocity setpoint, speed-limited horizontally and vertically.
   const Vec3f pos_error = sp.pos_ned_m - x.pos_ned_m;
   Vec3f vel_sp = Vec3f{gains_.pos_kp.x * pos_error.x, gains_.pos_kp.y * pos_error.y,
@@ -84,6 +112,10 @@ MotorOutputs QuadController::step(const VehicleState& x, const PositionSetpoint&
 
 MotorOutputs QuadController::step_attitude(const VehicleState& x, const Quatf& q_sp, real thrust_N,
                                            real dt_s) {
+  if (!usable_step(dt_s) || !is_attitude(x.q_nb) || !finite(x.omega_b_radps) ||
+      !is_attitude(q_sp) || !std::isfinite(thrust_N)) {
+    return skip_step();
+  }
   status_.tilt_limited = false;
   return inner_loops(x, q_sp, thrust_N, dt_s);
 }
@@ -104,6 +136,8 @@ MotorOutputs QuadController::inner_loops(const VehicleState& x, const Quatf& q_s
   status_.achieved = mixed.achieved;
   status_.saturated = mixed.saturated;
   status_.rate_integral = rate_pid_.integral();
+  status_.input_valid = true;
+  last_outputs_ = mixed.outputs;
   return mixed.outputs;
 }
 

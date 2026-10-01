@@ -70,7 +70,10 @@ ThrustTorque Mixer::wrench_of(const std::array<real, kNumRotors>& f) const {
 
 MixerResult Mixer::mix(const ThrustTorque& request) const {
   MixerResult result;
-  if (!valid_) {
+  const Vec3f& torque = request.torque_b_Nm;
+  const bool finite = std::isfinite(request.thrust_N) && std::isfinite(torque.x) &&
+                      std::isfinite(torque.y) && std::isfinite(torque.z);
+  if (!valid_ || !finite) {  // nothing sensible to allocate: motors off, flagged
     result.saturated = true;
     return result;
   }

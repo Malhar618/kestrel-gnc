@@ -18,7 +18,7 @@ flowchart LR
 
 | Piece | What it does | Detail that matters |
 |---|---|---|
-| `thrust_to_attitude` | acceleration + heading → attitude + thrust | z_b = −F/‖F‖ with F = m(a − g); heading fixes x_b. Tilt limited, 10 % minimum thrust, thrust = F projected on the *current* thrust axis. |
+| `thrust_to_attitude` | acceleration + heading → attitude + thrust | z_b = −F/‖F‖ with F = m(a − g). x_b lies in the vertical plane of the heading, so the setpoint's 3-2-1 yaw is the commanded yaw at any tilt. Tilt limited, 10 % minimum thrust, thrust = F projected on the *current* thrust axis. |
 | `attitude_rate_setpoint` | attitude error → body rates | Error = conj(q) ⊗ q_sp, which is in current body axes; the log map takes the short way. Per-axis rate limits. |
 | Rate loop (`Pid3`) | rate error → angular acceleration | Derivative on the measurement (no kick on setpoint steps), 30 Hz filter. Torque adds ω × Jω to cancel gyroscopic coupling. |
 | `Mixer` | thrust + torque → four motor commands | Inverts the allocation T = Σf, τx = Σ−y·f, τy = Σx·f, τz = Σ spin·(k_Q/k_T)·f, then u = √(f/k_T)/ω_max. |
@@ -35,6 +35,14 @@ The mixer gives things up in this order:
 While the mixer reports saturation, the velocity and rate integrators hold their values;
 the velocity integrator also holds while the tilt limit clips the horizontal request
 (conditional-integration anti-windup).
+
+## Bad inputs
+
+A step whose state, setpoint or time step is not finite, or whose attitude is not close to
+a unit quaternion, is skipped. The controller repeats its previous motor outputs, leaves
+its integrators and filters untouched and clears `status().input_valid`, so one bad sample
+can't reach the motors or stay in the controller's state. Handling a fault that persists is
+left to the caller. The mixer on its own answers a non-finite request with motors off.
 
 ## Default gains
 
@@ -55,7 +63,7 @@ Closed-loop results on the default plant (`tests/sim/test_closed_loop.cpp`):
 |---|---|
 | 1 m position step | no overshoot, within 2 cm after 2.4 s, peak tilt 22° |
 | 10° roll step (attitude mode) | no overshoot, within 0.2° after 0.41 s |
-| Recovery from 3.2 m away, starting tilted | within 5 cm after 3.2 s, level within 1° after 1.8 s |
+| Recovery from 3.2 m away, starting tilted | within 5 cm after 3.1 s, level within 1° after 1.8 s |
 | Steady 3 m/s wind | pushed 8 cm at most, within 2 cm after 7.3 s, leaning 2.9° into the wind (atan(drag/weight)) |
 | 20 m step | speed and tilt limits engage, no overshoot |
 

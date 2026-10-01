@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
+#include <vector>
 
 #include "gnc/control/control_laws.hpp"
 #include "gnc/control/mixer.hpp"
@@ -152,6 +154,20 @@ TEST(Mixer, NegativeThrustRequestStopsEveryRotor) {
   EXPECT_TRUE(r.saturated);
   for (float f : r.rotor_thrust_N) KESTREL_EXPECT_NEAR(f, 0.0f, 1e-5f);
   KESTREL_EXPECT_NEAR(r.achieved.thrust_N, 0.0f, 1e-5f);
+}
+
+TEST(Mixer, NonFiniteRequestStopsTheMotors) {
+  const Mixer mixer(default_quad_model());
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  const ThrustTorque requests[] = {{nan, {}},         {inf, {}},         {-inf, {}},
+                                   {10, {nan, 0, 0}}, {10, {0, inf, 0}}, {10, {0, 0, nan}},
+                                   {10, {0, 0, -inf}}};
+  for (const ThrustTorque& request : requests) {
+    const MixerResult r = mixer.mix(request);
+    EXPECT_TRUE(r.saturated);
+    for (float u : r.outputs.u) EXPECT_EQ(u, 0.0f);
+  }
 }
 
 TEST(Mixer, DegenerateGeometryIsRejected) {
@@ -312,6 +328,22 @@ TEST(ThrustToAttitude, HeadingPointsTheNose) {
   const ThrustAttitude ta =
       thrust_to_attitude({}, kPiF / 2, Quatf::identity(), kMass, kG, kTilt);  // face east
   EXPECT_TRUE(vec_near(rotate(ta.q_sp, Vec3f{1, 0, 0}), Vec3f{0, 1, 0}, 1e-6f));
+}
+
+TEST(ThrustToAttitude, SetpointYawIsTheCommandedHeadingAtAnyTilt) {
+  // Tilting diagonally to the heading must not swing the nose: the 3-2-1 yaw of the
+  // setpoint stays the commanded yaw, and the thrust axis still points along -F.
+  const Vec3f requests[] = {{4.76f, 4.76f, 0}, {-3, 5, 1}, {2, -6, -2}, {100, 100, 0}};
+  for (const Vec3f& a : requests) {
+    for (float yaw : {0.0f, 0.7f, -2.5f, 3.0f}) {
+      const ThrustAttitude ta = thrust_to_attitude(a, yaw, Quatf::identity(), kMass, kG, kTilt);
+      EXPECT_TRUE(close(to_euler321(ta.q_sp).yaw, yaw, 1e-5f)) << "yaw " << yaw;
+      if (!ta.tilt_limited) {
+        const Vec3f force = kMass * (a - Vec3f{0, 0, kG});
+        EXPECT_TRUE(vec_near(rotate(ta.q_sp, Vec3f{0, 0, 1}), -(force / norm(force)), 1e-6f));
+      }
+    }
+  }
 }
 
 TEST(ThrustToAttitude, TiltIsLimited) {
@@ -508,6 +540,70 @@ TEST(QuadController, ResetBehavesLikeAFreshController) {
   for (std::size_t i = 0; i < kNumRotors; ++i) EXPECT_EQ(a.u[i], b.u[i]);
   EXPECT_TRUE(vec_near(used.status().vel_integral, fresh.status().vel_integral, 0.0f));
   EXPECT_TRUE(vec_near(used.status().rate_integral, fresh.status().rate_integral, 0.0f));
+}
+
+TEST(QuadController, BadInputIsSkippedWithoutTouchingTheControllerState) {
+  // A non-finite state, setpoint or time step must never reach the motors or stick in
+  // the integrators: the step is skipped, the last outputs are repeated, and the next
+  // good step behaves as if the bad one never happened.
+  const QuadModel m = default_quad_model();
+  const QuadControllerGains g = default_controller_gains();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  VehicleState good;
+  good.pos_ned_m = {0.3f, -0.2f, -9.8f};
+  good.vel_ned_mps = {0.1f, 0, 0};
+  good.omega_b_radps = {0.05f, -0.02f, 0.01f};
+  PositionSetpoint sp;
+  sp.pos_ned_m = {0, 0, -10};
+
+  std::vector<VehicleState> bad_states(5, good);
+  bad_states[0].omega_b_radps.y = nan;
+  bad_states[1].pos_ned_m.z = inf;
+  bad_states[2].vel_ned_mps.x = nan;
+  bad_states[3].q_nb.w = nan;
+  bad_states[4].q_nb = {0, 0, 0, 0};  // finite, but not an attitude
+  for (const VehicleState& bad : bad_states) {
+    QuadController twin(m, g), c(m, g);
+    MotorOutputs last{};
+    for (int i = 0; i < 10; ++i) {
+      twin.step(good, sp, 0.004f);
+      last = c.step(good, sp, 0.004f);
+    }
+    const MotorOutputs held = c.step(bad, sp, 0.004f);
+    EXPECT_FALSE(c.status().input_valid);
+    for (std::size_t i = 0; i < kNumRotors; ++i) EXPECT_EQ(held.u[i], last.u[i]);
+    const MotorOutputs a = twin.step(good, sp, 0.004f);
+    const MotorOutputs b = c.step(good, sp, 0.004f);
+    EXPECT_TRUE(c.status().input_valid);
+    for (std::size_t i = 0; i < kNumRotors; ++i) EXPECT_EQ(a.u[i], b.u[i]);
+  }
+
+  // Bad setpoints and time steps are skipped the same way, in both modes.
+  QuadController c(m, g);
+  const MotorOutputs last = c.step(good, sp, 0.004f);
+  PositionSetpoint bad_sp = sp;
+  bad_sp.yaw_rad = nan;
+  const auto held = [&](const MotorOutputs& out) {
+    bool same = !c.status().input_valid;
+    for (std::size_t i = 0; i < kNumRotors; ++i) same = same && out.u[i] == last.u[i];
+    return same;
+  };
+  EXPECT_TRUE(held(c.step(good, bad_sp, 0.004f)));
+  bad_sp = sp;
+  bad_sp.acc_ff_ned_mps2.x = inf;
+  EXPECT_TRUE(held(c.step(good, bad_sp, 0.004f)));
+  bad_sp = sp;
+  bad_sp.pos_ned_m.x = nan;
+  EXPECT_TRUE(held(c.step(good, bad_sp, 0.004f)));
+  bad_sp = sp;
+  bad_sp.vel_ff_ned_mps.z = inf;
+  EXPECT_TRUE(held(c.step(good, bad_sp, 0.004f)));
+  EXPECT_TRUE(held(c.step(good, sp, 0.0f)));
+  EXPECT_TRUE(held(c.step(good, sp, nan)));
+  EXPECT_TRUE(held(c.step_attitude(good, Quatf{nan, 0, 0, 0}, 14.7f, 0.004f)));
+  EXPECT_TRUE(held(c.step_attitude(good, Quatf::identity(), nan, 0.004f)));
+  EXPECT_TRUE(held(c.step_attitude(bad_states[0], Quatf::identity(), 14.7f, 0.004f)));
 }
 
 }  // namespace

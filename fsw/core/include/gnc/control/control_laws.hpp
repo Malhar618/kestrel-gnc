@@ -25,9 +25,10 @@ struct ThrustAttitude {
 
 /// Turns a desired NED acceleration and heading into an attitude and collective thrust.
 /// The rotors push along -z body, so the thrust vector F = m (a_sp - g_n) must point
-/// along -z_b: z_b = -F / |F|. Heading fixes the rest of the frame. The horizontal part
-/// is limited so the tilt never exceeds tilt_max_rad, and the thrust is F projected on the
-/// current -z body axis, so a vehicle that is still turning doesn't overshoot vertically.
+/// along -z_b: z_b = -F / |F|. The nose is placed in the vertical plane of the heading, so
+/// the setpoint's 3-2-1 yaw is yaw_sp_rad at any tilt. The horizontal part is limited so
+/// the tilt never exceeds tilt_max_rad, and the thrust is F projected on the current
+/// -z body axis, so a vehicle that is still turning doesn't overshoot vertically.
 /// tilt_max_rad is clamped to [0, 89 deg].
 ThrustAttitude thrust_to_attitude(const Vec3f& acc_sp_ned_mps2, real yaw_sp_rad, const Quatf& q_nb,
                                   real mass_kg, real gravity_mps2, real tilt_max_rad);

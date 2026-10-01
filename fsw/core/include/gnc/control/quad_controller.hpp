@@ -43,6 +43,7 @@ struct ControllerStatus {
   bool tilt_limited = false;  // horizontal acceleration was cut back
   Vec3f vel_integral{};       // integrator states, to check anti-windup
   Vec3f rate_integral{};
+  bool input_valid = true;  // false: the last step was skipped (see QuadController)
 };
 
 /// Cascaded quadrotor controller:
@@ -50,6 +51,11 @@ struct ControllerStatus {
 ///   attitude -P-> body rate -PID-> angular acceleration -> torque -> mixer -> motors
 /// All loops run at the rate step() is called. Integrators freeze while the actuators
 /// are saturated (anti-windup). No heap, no exceptions: the whole state is these members.
+///
+/// A step whose state, setpoint or dt is not finite (or whose attitude is not close to a
+/// unit quaternion, or dt <= 0) is skipped: the previous motor outputs are returned, the
+/// integrators and filters are left alone, and status().input_valid is false. What to do
+/// about a fault that persists is the caller's decision.
 class QuadController {
  public:
   QuadController(const QuadModel& model, const QuadControllerGains& gains,
@@ -66,6 +72,7 @@ class QuadController {
 
  private:
   MotorOutputs inner_loops(const VehicleState& x, const Quatf& q_sp, real thrust_N, real dt_s);
+  MotorOutputs skip_step();
 
   QuadModel model_;
   QuadControllerGains gains_;
@@ -74,6 +81,7 @@ class QuadController {
   Pid3 vel_pid_;
   Pid3 rate_pid_;
   ControllerStatus status_{};
+  MotorOutputs last_outputs_{};
 };
 
 }  // namespace gnc

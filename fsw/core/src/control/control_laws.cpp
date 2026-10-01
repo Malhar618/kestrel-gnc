@@ -38,11 +38,14 @@ ThrustAttitude thrust_to_attitude(const Vec3f& acc_sp_ned_mps2, real yaw_sp_rad,
     out.tilt_limited = true;
   }
 
-  // Desired body axes in NED: z along -F, y perpendicular to z and the heading, x = y x z.
+  // Desired body axes in NED: z along -F. x is perpendicular to z and to the level
+  // direction 90 deg right of the heading, which puts the nose in the vertical plane of
+  // the heading: the setpoint's 3-2-1 yaw is yaw_sp at any tilt. z_b always has an upward
+  // part (tilt < 90 deg), so the cross product never vanishes.
   const Vec3f z_b = -(force / norm(force));
-  const Vec3f heading{std::cos(yaw_sp_rad), std::sin(yaw_sp_rad), 0};
-  const Vec3f y_b = normalized(cross(z_b, heading));
-  const Vec3f x_b = cross(y_b, z_b);
+  const Vec3f right_of_heading{-std::sin(yaw_sp_rad), std::cos(yaw_sp_rad), 0};
+  const Vec3f x_b = normalized(cross(right_of_heading, z_b));
+  const Vec3f y_b = cross(z_b, x_b);
   Mat3f c_nb{};  // columns are the body axes expressed in NED
   c_nb(0, 0) = x_b.x;
   c_nb(1, 0) = x_b.y;
