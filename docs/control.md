@@ -55,6 +55,15 @@ Closed-loop results on the default plant (`tests/sim/test_closed_loop.cpp`):
 |---|---|
 | 1 m position step | no overshoot, within 2 cm after 2.4 s, peak tilt 22° |
 | 10° roll step (attitude mode) | no overshoot, within 0.2° after 0.41 s |
-| Recovery from 2.5 m offset and tilted | within 5 cm and 1° after 6 s |
-| Steady 3 m/s wind | within 2 cm after 10 s, leaning into the wind by atan(drag/weight) |
+| Recovery from 3.2 m away, starting tilted | within 5 cm after 3.2 s, level within 1° after 1.8 s |
+| Steady 3 m/s wind | pushed 8 cm at most, within 2 cm after 7.3 s, leaning 2.9° into the wind (atan(drag/weight)) |
 | 20 m step | speed and tilt limits engage, no overshoot |
+
+Margin for delay the simulator does not model (10° roll step, commands reaching the motors late):
+
+| Extra delay | Default plant | Mismatched plant |
+|---|---|---|
+| 0 ms | no overshoot, 0.40 s | 8% overshoot, 0.71 s |
+| 8 ms | no overshoot, 0.46 s | 11%, 0.70 s |
+| 20 ms | no overshoot, 0.48 s | 18%, 1.06 s |
+| 30 ms | 7%, 0.86 s | 28%, 1.53 s |

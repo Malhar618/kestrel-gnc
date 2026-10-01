@@ -47,11 +47,14 @@ struct Sample {
 };
 
 // Flies the flight-software controller (250 Hz, float) against the plant (1 kHz, double).
+// delay_ms holds every motor command back by that long before the plant sees it.
 std::vector<Sample> fly(const QuadParams& p, const Environment& env, QuadState x,
                         const std::function<Target(double)>& target, double duration_s,
-                        const gnc::QuadControllerGains& gains = gnc::default_controller_gains()) {
+                        const gnc::QuadControllerGains& gains = gnc::default_controller_gains(),
+                        int delay_ms = 0) {
   gnc::QuadController controller(gnc::default_quad_model(), gains);
   std::vector<Sample> log;
+  std::vector<MotorCommand> in_transit;  // commands on their way to the motors, oldest first
   MotorCommand cmd{};
   const int steps = static_cast<int>(std::lround(duration_s * 1000.0));
   for (int k = 0; k <= steps; ++k) {
@@ -63,8 +66,11 @@ std::vector<Sample> fly(const QuadParams& p, const Environment& env, QuadState x
                                  ? controller.step_attitude(s, tg.q_sp, tg.thrust_N, 0.004f)
                                  : controller.step(s, tg.pos, 0.004f));
     }
+    if (k == 0) in_transit.assign(static_cast<std::size_t>(delay_ms) + 1, cmd);
+    in_transit.erase(in_transit.begin());
+    in_transit.push_back(cmd);
     log.push_back({t, x, controller.status().saturated});
-    x = quad_step(p, x, cmd, env, 1e-3);
+    x = quad_step(p, x, in_transit.front(), env, 1e-3);
   }
   return log;
 }
@@ -336,6 +342,28 @@ TEST(ClosedLoop, StaysStableWhenThePlantDisagreesWithTheModel) {
       [](double t) { return position(t < 1.0 ? 0.0f : 1.0f, 0, -10); }, 8.0);
   EXPECT_NEAR(pos.back().x.body.pos_ned_m.x, 1.0, 0.02);
   EXPECT_NEAR(pos.back().x.body.pos_ned_m.z, -10.0, 0.02);  // integral absorbs the weak props
+}
+
+TEST(ClosedLoop, ToleratesExtraActuatorDelay) {
+  // The plant here has no transport delay; real links and ESCs do. The roll loop must
+  // keep its shape with the commands arriving late.
+  const Environment env{};
+  const auto roll = [&](const QuadParams& p, int delay_ms, double* overshoot_deg) {
+    const auto log = fly(
+        p, env, hover_state(p, env, Vec3d{0, 0, -10}), [](double t) { return roll_step(t, 10.0f); },
+        3.0, gnc::default_controller_gains(), delay_ms);
+    double peak = 0.0;
+    for (const Sample& s : log) peak = std::max(peak, roll_deg(s.x));
+    *overshoot_deg = peak - 10.0;
+    return settling_time(log, 0.5, [](const QuadState& x) { return roll_deg(x) - 10.0; }, 0.2);
+  };
+  double overshoot = 0.0;
+  // Matched plant, 20 ms late (five control periods): still no overshoot.
+  EXPECT_LT(roll(default_quad_params(), 20, &overshoot), 0.6);
+  EXPECT_LT(overshoot, 0.5);
+  // Mismatched plant, 8 ms late: inside the same 15% bound as with no delay.
+  EXPECT_LT(roll(mismatched_plant(), 8, &overshoot), 1.0);
+  EXPECT_LT(overshoot, 1.5);
 }
 
 TEST(ClosedLoop, RunsAreBitIdentical) {

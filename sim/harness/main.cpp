@@ -156,7 +156,7 @@ constexpr std::array<Scenario, 10> kScenarios{{
      nullptr},
     // Closed loop: the flight software's cascaded controller flies on truth at 250 Hz.
     {"hold",
-     "recover from 2.5 m off and tilted to a hover at (0, 0, -10)",
+     "recover from 3.2 m away and tilted to a hover at (0, 0, -10)",
      8.0,
      {2, -1.5, -8},
      {10 * kDeg, -5 * kDeg, 30 * kDeg},
@@ -201,7 +201,7 @@ constexpr std::array<Scenario, 10> kScenarios{{
      nullptr,
      square_target},
     {"wind_hold",
-     "hold position in a steady 3 m/s north wind",
+     "hold position in a steady 3 m/s wind blowing north",
      15.0,
      {0, 0, -10},
      kLevel,

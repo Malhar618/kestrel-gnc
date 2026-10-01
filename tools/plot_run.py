@@ -80,7 +80,7 @@ def plot_state(df: pd.DataFrame, title: str, path: Path) -> None:
     for column in ("roll_deg", "yaw_deg", "roll_sp_deg", "yaw_sp_deg"):
         if column in df and df[column].notna().all():
             df[column] = np.rad2deg(np.unwrap(np.deg2rad(df[column])))
-    has_setpoints = any(c in df and df[c].notna().any() for c in SETPOINT_OF.values())
+    legend_ax = None  # the first panel that shows both a setpoint and the actual value
     fig, axes = plt.subplots(len(STATE_ROWS), 3, figsize=(10, 8), sharex=True)
     for row, (ylabel, columns, names, min_half_range) in enumerate(STATE_ROWS):
         for col, (column, name) in enumerate(zip(columns, names)):
@@ -90,6 +90,7 @@ def plot_state(df: pd.DataFrame, title: str, path: Path) -> None:
             if sp in df and df[sp].notna().any():
                 ax.plot(df["t_s"], df[sp], color=COMMAND, label="Setpoint")
                 shown.append(df[sp].dropna())
+                legend_ax = legend_ax or ax
             ax.plot(df["t_s"], df[column], color=TRUTH, label="Actual")
             set_min_range(ax, pd.concat(shown), min_half_range)
             ax.set_title(name)
@@ -97,8 +98,8 @@ def plot_state(df: pd.DataFrame, title: str, path: Path) -> None:
                 ax.set_ylabel(ylabel)
             if row == len(STATE_ROWS) - 1:
                 ax.set_xlabel("Time [s]")
-    if has_setpoints:
-        axes[0, 0].legend(loc="best", frameon=False)
+    if legend_ax is not None:
+        legend_ax.legend(loc="best", frameon=False)
     fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(path)
