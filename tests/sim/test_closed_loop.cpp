@@ -18,6 +18,7 @@ namespace sim::test {
 namespace {
 
 using gnc::Vec3d;
+using gnc::test::same_rotation;
 using gnc::test::vec_near;
 
 constexpr double kDeg = std::numbers::pi / 180.0;
@@ -47,8 +48,9 @@ struct Sample {
 
 // Flies the flight-software controller (250 Hz, float) against the plant (1 kHz, double).
 std::vector<Sample> fly(const QuadParams& p, const Environment& env, QuadState x,
-                        const std::function<Target(double)>& target, double duration_s) {
-  gnc::QuadController controller(gnc::default_quad_model(), gnc::default_controller_gains());
+                        const std::function<Target(double)>& target, double duration_s,
+                        const gnc::QuadControllerGains& gains = gnc::default_controller_gains()) {
+  gnc::QuadController controller(gnc::default_quad_model(), gains);
   std::vector<Sample> log;
   MotorCommand cmd{};
   const int steps = static_cast<int>(std::lround(duration_s * 1000.0));
@@ -144,6 +146,28 @@ TEST(ClosedLoop, MixerCommandsProduceTheRequestedWrenchOnThePlant) {
   EXPECT_TRUE(vec_near(w.torque_b_Nm, Vec3d{0.2, -0.15, 0.03}, 1e-5));
 }
 
+TEST(FswBridge, ConvertsPrecisionNotFrames) {
+  // Truth (double) -> flight state (float): same numbers, same frames, nothing reordered.
+  QuadState x;
+  x.body.pos_ned_m = {1.0, -2.0, -10.0};
+  x.body.vel_ned_mps = {0.5, 0.25, -0.125};
+  x.body.q_nb = gnc::from_euler321(gnc::Euler321d{0.1, -0.2, 1.5});
+  x.body.omega_b_radps = {0.3, -0.2, 0.1};
+  const gnc::VehicleState s = to_fsw_state(x);
+  EXPECT_TRUE(vec_near(s.pos_ned_m, gnc::Vec3f{1.0f, -2.0f, -10.0f}, 0.0f));
+  EXPECT_TRUE(vec_near(s.vel_ned_mps, gnc::Vec3f{0.5f, 0.25f, -0.125f}, 0.0f));
+  EXPECT_TRUE(vec_near(s.omega_b_radps, gnc::Vec3f{0.3f, -0.2f, 0.1f}, 0.0f));
+  EXPECT_TRUE(same_rotation(s.q_nb, gnc::from_euler321(gnc::Euler321f{0.1f, -0.2f, 1.5f}),
+                            gnc::test::tol<float>()));
+
+  gnc::MotorOutputs out;
+  out.u = {0.1f, 0.2f, 0.3f, 0.4f};
+  const MotorCommand cmd = to_motor_command(out);
+  for (std::size_t i = 0; i < kNumRotors; ++i) {
+    EXPECT_EQ(cmd.u[i], static_cast<double>(out.u[i]));  // same rotor order
+  }
+}
+
 // --- Closed-loop specs ---
 
 TEST(ClosedLoop, RecoversToHoverFromAnOffsetTiltedStart) {
@@ -182,6 +206,29 @@ TEST(ClosedLoop, OneMetreStepSettlesWithoutOvershoot) {
   EXPECT_LT(tilt, 35.5);
 }
 
+TEST(ClosedLoop, OneMetreStepFacingEast) {
+  // Same step flown with the nose pointing east: a north move is now a roll, not a pitch.
+  // Catches a world/body mix-up that a yaw-0 flight cannot see.
+  const QuadParams p = default_quad_params();
+  const Environment env{};
+  QuadState x0 = hover_state(p, env, Vec3d{0, 0, -10});
+  x0.body.q_nb = gnc::from_euler321(gnc::Euler321d{0, 0, 90 * kDeg});
+  const auto log =
+      fly(p, env, x0, [](double t) { return position(t < 1.0 ? 0.0f : 1.0f, 0, -10, 90.0f); }, 6.0);
+  double peak = 0.0, cross = 0.0, tilt = 0.0;
+  for (const Sample& s : log) {
+    peak = std::max(peak, s.x.body.pos_ned_m.x);
+    cross = std::max(cross, std::abs(s.x.body.pos_ned_m.y));
+    tilt = std::max(tilt, tilt_deg(s.x));
+  }
+  EXPECT_LT(peak, 1.10);
+  EXPECT_LT(settling_time(
+                log, 1.0, [](const QuadState& x) { return x.body.pos_ned_m.x - 1.0; }, 0.02),
+            3.0);
+  EXPECT_LT(cross, 0.01);
+  EXPECT_LT(tilt, 35.5);
+}
+
 TEST(ClosedLoop, TenDegreeRollStepSettlesInHalfASecond) {
   const QuadParams p = default_quad_params();
   const Environment env{};
@@ -193,6 +240,22 @@ TEST(ClosedLoop, TenDegreeRollStepSettlesInHalfASecond) {
   EXPECT_LT(peak, 10.5);  // < 5% overshoot
   EXPECT_LT(
       settling_time(log, 0.5, [](const QuadState& x) { return roll_deg(x) - 10.0; }, 0.2), 0.5);
+}
+
+TEST(ClosedLoop, RateDerivativeSpeedsUpTheRollStep) {
+  // What kd is for: on the nominal plant it shortens the settle. (It is not what makes the
+  // loop robust to a mismatched plant; the rate/attitude gain ratio does that.)
+  const QuadParams p = default_quad_params();
+  const Environment env{};
+  const auto settle = [&](const gnc::QuadControllerGains& g) {
+    const auto log = fly(
+        p, env, hover_state(p, env, Vec3d{0, 0, -10}), [](double t) { return roll_step(t, 10.0f); },
+        2.0, g);
+    return settling_time(log, 0.5, [](const QuadState& x) { return roll_deg(x) - 10.0; }, 0.2);
+  };
+  gnc::QuadControllerGains no_kd = gnc::default_controller_gains();
+  no_kd.rate.kd = {};
+  EXPECT_LT(settle(gnc::default_controller_gains()), settle(no_kd) - 0.05);
 }
 
 TEST(ClosedLoop, YawStepTurnsInPlace) {
@@ -220,7 +283,9 @@ TEST(ClosedLoop, IntegralActionRejectsSteadyWind) {
   for (const Sample& s : log) {
     const double err = gnc::norm(s.x.body.pos_ned_m - Vec3d{0, 0, -10});
     excursion = std::max(excursion, err);
-    if (s.t_s >= 10.0) EXPECT_LT(err, 0.02) << "t = " << s.t_s;
+    if (s.t_s >= 10.0) {
+      EXPECT_LT(err, 0.02) << "t = " << s.t_s;
+    }
   }
   EXPECT_LT(excursion, 0.20);
   // The wind blows toward the north, so holding station means tilting the thrust south,
@@ -240,15 +305,17 @@ TEST(ClosedLoop, LongStepHitsSpeedAndTiltLimitsWithoutWindup) {
   const auto log = fly(
       p, env, hover_state(p, env, Vec3d{0, 0, -10}), [](double) { return position(20, 0, -10); },
       16.0);
-  double peak = 0.0, tilt = 0.0, speed = 0.0;
+  double peak = 0.0, tilt = 0.0, speed = 0.0, altitude = 0.0;
   for (const Sample& s : log) {
     peak = std::max(peak, s.x.body.pos_ned_m.x);
+    altitude = std::max(altitude, std::abs(s.x.body.pos_ned_m.z + 10.0));
     tilt = std::max(tilt, tilt_deg(s.x));
     speed = std::max(speed, std::hypot(s.x.body.vel_ned_mps.x, s.x.body.vel_ned_mps.y));
   }
   EXPECT_LT(peak, 20.2);
   EXPECT_LT(tilt, 36.0);
   EXPECT_LT(speed, 5.2);
+  EXPECT_LT(altitude, 0.08);  // height is held while tilted at the limit
   EXPECT_NEAR(log.back().x.body.pos_ned_m.x, 20.0, 0.015);
 }
 

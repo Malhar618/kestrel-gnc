@@ -18,7 +18,7 @@ struct QuadControllerGains {
   PidGains3 vel{};          // velocity error -> acceleration (m/s^2)
   AttitudeGains att{};      // attitude error -> body rate
   PidGains3 rate{};         // body-rate error -> angular acceleration (rad/s^2)
-  real tilt_max_rad = 0;
+  real tilt_max_rad = 0;    // clamped to [0, 89 deg]
 };
 
 /// Gains for default_quad_model(), with the loop bandwidths they were chosen from.

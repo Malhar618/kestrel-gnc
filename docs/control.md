@@ -32,8 +32,9 @@ The mixer gives things up in this order:
 2. **Collective thrust** is shifted as little as possible to keep every rotor in range.
 3. **Roll and pitch** are scaled last, keeping their direction.
 
-While the mixer reports saturation, or the tilt limit clips the horizontal request, the
-velocity and rate integrators hold their values (conditional-integration anti-windup).
+While the mixer reports saturation, the velocity and rate integrators hold their values;
+the velocity integrator also holds while the tilt limit clips the horizontal request
+(conditional-integration anti-windup).
 
 ## Default gains
 
@@ -43,8 +44,8 @@ thrust coefficient:
 
 | Loop | Gains | Why |
 |---|---|---|
-| Rate (roll, pitch) | kp 22, ki 20, kd 0.2 | Crossover below the 33 rad/s motor pole; kd restores the phase the motor lag and 4 ms control period take. |
-| Attitude | kp 6 (roll, pitch), 4 (yaw) | ~3.7× slower than the rate loop. |
+| Rate (roll, pitch) | kp 22, ki 20, kd 0.2 | Crossover below the 33 rad/s motor pole. kd buys speed on the nominal plant: a 10° roll step settles in 0.40 s instead of 0.51 s. It adds no robustness (worst-case overshoot 8% with it, 7% without). |
+| Attitude | kp 6 (roll, pitch), 4 (yaw) | ~3.7× slower than the rate loop. That ratio sets the damping, ζ ≈ ½√(k_rate / k_att); at 2.25 (kp 8 over rate kp 18) the mismatched plant overshot 28%. |
 | Velocity | kp 4, ki 1 (horizontal); kp 5, ki 2 (vertical) | |
 | Position | kp 1.2 (horizontal), 2 (vertical) | ~3.3× slower than velocity; 5 m/s horizontal and 2 m/s vertical speed limits. |
 

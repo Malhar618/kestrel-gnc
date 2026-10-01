@@ -115,11 +115,43 @@ TEST(Mixer, ExcessThrustIsCutButTorqueIsKept) {
   EXPECT_TRUE(close(r.achieved.torque_b_Nm.x, 0.2f, 1e-4f));
 }
 
-TEST(Mixer, NegativeThrustRequestStopsAtZero) {
+TEST(Mixer, RollPitchJustBeyondRangeIsScaledKeepingItsDirection) {
+  const QuadModel m = default_quad_model();
+  const Mixer mixer(m);
+  // The roll/pitch shares span 14.1 N, more than f_max = 12.1 N, though no single share does.
+  const MixerResult r = mixer.mix({m.mass_kg * kG, {3.0f, 1.5f, 0.0f}});
+  EXPECT_TRUE(r.saturated);
+  EXPECT_TRUE(close(r.achieved.torque_b_Nm.x / r.achieved.torque_b_Nm.y, 2.0f, 1e-4f));
+}
+
+TEST(Mixer, ExcessThrustKeepsTheBusiestRotorAtFullThrust) {
+  // The collective shift is the smallest one that fits: the top rotor ends exactly at f_max.
+  const QuadModel m = default_quad_model();
+  const Mixer mixer(m);
+  const float f_max = m.max_rotor_thrust_N();
+  const MixerResult r = mixer.mix({4.0f * f_max * 1.2f, {0.2f, 0.0f, 0.0f}});
+  const float top = *std::max_element(r.rotor_thrust_N.begin(), r.rotor_thrust_N.end());
+  EXPECT_TRUE(close(top, f_max, 1e-5f));
+}
+
+TEST(Mixer, YawUsesTheHeadroomLeftAfterACollectiveShift) {
+  // Too much thrust plus roll, pitch and a small yaw: once the collective is cut, the yaw
+  // request fits and must be delivered in full.
+  const QuadModel m = default_quad_model();
+  const Mixer mixer(m);
+  const float f_max = m.max_rotor_thrust_N();
+  const MixerResult r = mixer.mix({4.0f * f_max * 1.2f, {0.2f, 0.2f, 0.02f}});
+  EXPECT_TRUE(close(r.achieved.torque_b_Nm.x, 0.2f, 1e-4f));
+  EXPECT_TRUE(close(r.achieved.torque_b_Nm.y, 0.2f, 1e-4f));
+  EXPECT_TRUE(close(r.achieved.torque_b_Nm.z, 0.02f, 1e-4f));
+}
+
+TEST(Mixer, NegativeThrustRequestStopsEveryRotor) {
   const QuadModel m = default_quad_model();
   const MixerResult r = Mixer(m).mix({-5.0f, {}});
-  for (float u : r.outputs.u) EXPECT_GE(u, 0.0f);
-  EXPECT_TRUE(within_rotor_range(r, m.max_rotor_thrust_N()));
+  EXPECT_TRUE(r.saturated);
+  for (float f : r.rotor_thrust_N) KESTREL_EXPECT_NEAR(f, 0.0f, 1e-5f);
+  KESTREL_EXPECT_NEAR(r.achieved.thrust_N, 0.0f, 1e-5f);
 }
 
 TEST(Mixer, DegenerateGeometryIsRejected) {
@@ -238,6 +270,17 @@ TEST(AttitudeControl, HalfTurnYawErrorPicksOneDirection) {
   EXPECT_TRUE(vec_near(a, b, 0.0f));
 }
 
+TEST(AttitudeControl, EachAxisUsesItsOwnGain) {
+  const AttitudeGains g{{3, 5, 7}, {10, 10, 10}};  // distinct gains, limits out of the way
+  const Quatf q = Quatf::identity();
+  EXPECT_TRUE(vec_near(attitude_rate_setpoint(q, from_euler321(Euler321f{0.1f, 0, 0}), g),
+                       Vec3f{0.3f, 0, 0}, 1e-5f));
+  EXPECT_TRUE(vec_near(attitude_rate_setpoint(q, from_euler321(Euler321f{0, 0.1f, 0}), g),
+                       Vec3f{0, 0.5f, 0}, 1e-5f));
+  EXPECT_TRUE(vec_near(attitude_rate_setpoint(q, from_euler321(Euler321f{0, 0, 0.1f}), g),
+                       Vec3f{0, 0, 0.7f}, 1e-5f));
+}
+
 // --- Acceleration -> attitude + thrust ---
 
 constexpr float kMass = 1.5f;
@@ -292,6 +335,27 @@ TEST(ThrustToAttitude, ThrustIsProjectedOnTheCurrentThrustAxis) {
   EXPECT_TRUE(close(ta.thrust_N, kMass * kG * std::cos(kPiF / 6), 1e-5f));
 }
 
+TEST(ThrustToAttitude, TiltIsLimitedInEveryDirection) {
+  const Vec3f requests[] = {{0, 100, 0}, {-100, 0, 0}, {100, 100, 0}, {30, -80, 0}};
+  for (const Vec3f& a : requests) {
+    const ThrustAttitude ta = thrust_to_attitude(a, 0, Quatf::identity(), kMass, kG, kTilt);
+    EXPECT_TRUE(ta.tilt_limited);
+    const Vec3f z_b = rotate(ta.q_sp, Vec3f{0, 0, 1});
+    KESTREL_EXPECT_NEAR(std::acos(z_b.z), kTilt, 1e-5f);  // tilted by exactly the limit...
+    const float h = std::hypot(a.x, a.y);                 // ...toward the requested direction
+    KESTREL_EXPECT_NEAR((-z_b.x * a.x - z_b.y * a.y) / h, std::sin(kTilt), 1e-5f);
+  }
+}
+
+TEST(ThrustToAttitude, TiltLimitAtOrPast90DegreesNeverReversesThrust) {
+  // tan() flips sign past 90 deg; the limit is clamped so the thrust can't be reversed.
+  for (float limit : {kPiF / 2, 1.6f}) {
+    const ThrustAttitude ta = thrust_to_attitude({2, 0, 0}, 0, Quatf::identity(), kMass, kG, limit);
+    EXPECT_FALSE(ta.tilt_limited);
+    EXPECT_TRUE(close(to_euler321(ta.q_sp).pitch, -std::atan(2.0f / kG), 1e-5f));
+  }
+}
+
 // --- Whole controller ---
 
 TEST(QuadController, AtTheSetpointItCommandsHover) {
@@ -334,6 +398,116 @@ TEST(QuadController, SaturationFreezesTheRateIntegrator) {
   c.step_attitude(level, rolled, m.mass_kg * kG, 0.004f);
   c.step_attitude(level, rolled, m.mass_kg * kG, 0.004f);
   EXPECT_GT(norm(c.status().rate_integral - frozen), 0.0f);
+}
+
+TEST(QuadController, VelocitySetpointIsSpeedLimitedAndPerAxis) {
+  const QuadModel m = default_quad_model();
+  const QuadControllerGains g = default_controller_gains();
+  VehicleState x;
+  x.pos_ned_m = {0, 0, -10};
+  PositionSetpoint sp;
+  // Diagonal climb: the horizontal limit is on |v_xy| (a circle, not a box) and keeps the
+  // direction; the vertical speed is clamped to the climb limit.
+  QuadController climb(m, g);
+  sp.pos_ned_m = {30, 30, -40};
+  climb.step(x, sp, 0.004f);
+  const Vec3f v = climb.status().vel_sp_ned_mps;
+  KESTREL_EXPECT_NEAR(std::hypot(v.x, v.y), g.vel_max_xy_mps, 1e-5f);
+  KESTREL_EXPECT_NEAR(v.x, v.y, 1e-6f);
+  KESTREL_EXPECT_NEAR(v.z, -g.vel_max_z_mps, 1e-6f);
+  // Descent is limited too.
+  QuadController descend(m, g);
+  sp.pos_ned_m = {0, 0, 20};
+  descend.step(x, sp, 0.004f);
+  KESTREL_EXPECT_NEAR(descend.status().vel_sp_ned_mps.z, g.vel_max_z_mps, 1e-6f);
+  // Inside the limits the setpoint is plain per-axis P.
+  QuadController small(m, g);
+  sp.pos_ned_m = {0.1f, 0.2f, -9.7f};
+  small.step(x, sp, 0.004f);
+  EXPECT_TRUE(vec_near(small.status().vel_sp_ned_mps,
+                       Vec3f{g.pos_kp.x * 0.1f, g.pos_kp.y * 0.2f, g.pos_kp.z * 0.3f}, 1e-5f));
+}
+
+TEST(QuadController, EachPositionAxisUsesItsOwnGain) {
+  QuadControllerGains g = default_controller_gains();
+  g.pos_kp = {1.0f, 2.0f, 3.0f};  // distinct, and small enough that no speed limit engages
+  QuadController c(default_quad_model(), g);
+  VehicleState x;
+  x.pos_ned_m = {0, 0, -10};
+  PositionSetpoint sp;
+  sp.pos_ned_m = {0.5f, -0.5f, -10.5f};
+  c.step(x, sp, 0.004f);
+  EXPECT_TRUE(vec_near(c.status().vel_sp_ned_mps, Vec3f{0.5f, -1.0f, -1.5f}, 1e-5f));
+}
+
+TEST(QuadController, FeedForwardTermsReachTheLoops) {
+  const QuadModel m = default_quad_model();
+  const QuadControllerGains g = default_controller_gains();
+  VehicleState x;
+  x.pos_ned_m = {0, 0, -10};
+  PositionSetpoint sp;
+  sp.pos_ned_m = x.pos_ned_m;
+  QuadController c1(m, g);
+  sp.vel_ff_ned_mps = {1.0f, -0.5f, 0.2f};
+  c1.step(x, sp, 0.004f);
+  EXPECT_TRUE(vec_near(c1.status().vel_sp_ned_mps, sp.vel_ff_ned_mps, 1e-6f));
+  QuadController c2(m, g);
+  sp.vel_ff_ned_mps = {};
+  sp.acc_ff_ned_mps2 = {0.5f, 0.0f, -0.3f};
+  c2.step(x, sp, 0.004f);
+  EXPECT_TRUE(vec_near(c2.status().acc_sp_ned_mps2, sp.acc_ff_ned_mps2, 1e-6f));
+  // ...and on to the attitude and thrust: 0.5 m/s^2 north pitches the nose down.
+  EXPECT_TRUE(close(to_euler321(c2.status().q_sp).pitch, -std::atan2(0.5f, kG + 0.3f), 1e-4f));
+  EXPECT_TRUE(close(c2.status().request.thrust_N, m.mass_kg * (kG + 0.3f), 1e-5f));
+}
+
+TEST(QuadController, ProjectsThrustOnTheCurrentAttitude) {
+  // Rolled 30 deg at the position setpoint: the full cascade must project the hover force
+  // onto the current thrust axis, not the level axis or the setpoint's axis.
+  const QuadModel m = default_quad_model();
+  QuadController c(m, default_controller_gains());
+  VehicleState x;
+  x.pos_ned_m = {0, 0, -10};
+  x.q_nb = from_euler321(Euler321f{kPiF / 6, 0, 0});
+  PositionSetpoint sp;
+  sp.pos_ned_m = x.pos_ned_m;
+  c.step(x, sp, 0.004f);
+  EXPECT_TRUE(close(c.status().request.thrust_N, m.mass_kg * kG * std::cos(kPiF / 6), 1e-5f));
+}
+
+TEST(QuadController, MixerSaturationFreezesTheVelocityIntegrator) {
+  QuadModel m = default_quad_model();
+  m.mass_kg = 5.0f;  // weight 49 N, more than the 48.4 N the rotors can give
+  QuadController c(m, default_controller_gains());
+  VehicleState x;
+  x.pos_ned_m = {0, 0, -9};
+  PositionSetpoint sp;
+  sp.pos_ned_m = {0, 0, -10};
+  c.step(x, sp, 0.004f);
+  ASSERT_TRUE(c.status().saturated);
+  ASSERT_FALSE(c.status().tilt_limited);
+  const Vec3f frozen = c.status().vel_integral;
+  for (int i = 0; i < 50; ++i) c.step(x, sp, 0.004f);
+  EXPECT_TRUE(vec_near(c.status().vel_integral, frozen, 0.0f));
+}
+
+TEST(QuadController, ResetBehavesLikeAFreshController) {
+  const QuadModel m = default_quad_model();
+  const QuadControllerGains g = default_controller_gains();
+  QuadController fresh(m, g), used(m, g);
+  VehicleState x;
+  x.pos_ned_m = {0.5f, 0, -10};
+  PositionSetpoint sp;
+  sp.pos_ned_m = {0, 0, -10};
+  for (int i = 0; i < 100; ++i) used.step(x, sp, 0.004f);
+  used.step_attitude(x, from_euler321(Euler321f{0.5f, 0, 0}), 60.0f, 0.004f);
+  ASSERT_TRUE(used.status().saturated);
+  used.reset();
+  const MotorOutputs a = fresh.step(x, sp, 0.004f);
+  const MotorOutputs b = used.step(x, sp, 0.004f);
+  for (std::size_t i = 0; i < kNumRotors; ++i) EXPECT_EQ(a.u[i], b.u[i]);
+  EXPECT_TRUE(vec_near(used.status().vel_integral, fresh.status().vel_integral, 0.0f));
+  EXPECT_TRUE(vec_near(used.status().rate_integral, fresh.status().rate_integral, 0.0f));
 }
 
 }  // namespace

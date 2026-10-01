@@ -27,7 +27,10 @@ ThrustAttitude thrust_to_attitude(const Vec3f& acc_sp_ned_mps2, real yaw_sp_rad,
   // Limit tilt: |horizontal| <= up * tan(tilt_max).
   const real up = -force.z;
   const real horizontal = std::hypot(force.x, force.y);
-  const real horizontal_max = up * std::tan(tilt_max_rad);
+  // tan() changes sign at 90 deg, which would reverse the horizontal thrust, so the
+  // limit is clamped to [0, 89 deg]. (min_up already keeps the tilt below 90 deg.)
+  const real tilt_max = std::clamp(tilt_max_rad, real(0), real(1.5533f));
+  const real horizontal_max = up * std::tan(tilt_max);
   if (horizontal > horizontal_max) {
     const real scale = horizontal_max / horizontal;
     force.x *= scale;

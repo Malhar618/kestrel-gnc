@@ -8,13 +8,15 @@ namespace gnc {
 
 QuadControllerGains default_controller_gains() {
   // Chosen from the inside out, each loop a few times slower than the one it drives, then
-  // checked in closed loop against the plant, including one with +-30% inertia, a 50%
-  // slower motor and +-10% thrust coefficient:
+  // checked in closed loop, including against plants with +-30% inertia, a 50% slower
+  // motor and +-10% thrust coefficient:
   //   motor lag        tau = 30 ms, a pole at 33 rad/s
-  //   rate loop        kp 22 (crossover ~22 rad/s, below the motor pole). kd 0.2 adds the
-  //                    phase lead the motor lag and 4 ms control period take away; without
-  //                    it the mismatched plant overshoots a 10 deg step by 28%, with it 8%.
-  //   attitude loop    kp 6 1/s, ~3.7x slower than the rate loop
+  //   rate loop        kp 22, below the motor pole. kd 0.2 buys speed on the nominal plant:
+  //                    a 10 deg roll step settles in 0.40 s instead of 0.51 s. It does not
+  //                    add robustness (worst-case overshoot 8% with it, 7% without).
+  //   attitude loop    kp 6 1/s. The ratio to the rate loop (22 / 6 = 3.7) is what sets the
+  //                    damping, zeta ~ 0.5 sqrt(ratio); at a ratio of 2.25 (kp 8 over rate
+  //                    kp 18) the mismatched plant overshot 28%.
   //   velocity loop    kp 4 1/s, ki 1 1/s^2 horizontal (5 and 2 vertical)
   //   position loop    kp 1.2 1/s horizontal, ~3.3x slower than velocity (2 vertical)
   QuadControllerGains g;
